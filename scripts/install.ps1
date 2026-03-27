@@ -6,6 +6,7 @@ param(
     [string]$InstallMethod = "npm",
     [string]$Tag = "latest",
     [string]$GitDir = "$env:USERPROFILE\openclaw",
+    [string]$RepoUrl = "https://github.com/openclaw/openclaw.git",
     [switch]$NoOnboard,
     [switch]$NoGitUpdate,
     [switch]$DryRun
@@ -29,7 +30,8 @@ function Write-Host {
         "error" { "$ERROR✗$NC $Message" }
         default { "$MUTED·$NC $Message" }
     }
-    Microsoft.PowerShell.Host\Write-Host $msg
+    # Microsoft.PowerShell.Host\Write-Host $msg
+    & (Get-Command -CommandType Cmdlet -Name 'Write-Host') $msg
 }
 
 function Write-Banner {
@@ -216,13 +218,18 @@ function Install-OpenClawNpm {
 }
 
 function Install-OpenClawGit {
-    param([string]$RepoDir, [switch]$Update)
-    
+    param(
+        [string]$RepoDir,
+        [string]$RepoUrl = "https://github.com/openclaw/openclaw.git",
+        [switch]$Update
+    )
+
     Write-Host "Installing OpenClaw from git..." -Level info
-    
+    Write-Host "  Repository: $RepoUrl" -Level info
+
     if (!(Test-Path $RepoDir)) {
         Write-Host "  Cloning repository..." -Level info
-        git clone https://github.com/openclaw/openclaw.git $RepoDir 2>&1
+        git clone $RepoUrl $RepoDir 2>&1
     } elseif ($Update) {
         Write-Host "  Updating repository..." -Level info
         git -C $RepoDir pull --rebase 2>&1
@@ -243,15 +250,15 @@ function Install-OpenClawGit {
     pnpm --dir $RepoDir build 2>&1
     
     # Create wrapper
-    $wrapperDir = "$env:USERPROFILE\.local\bin"
-    if (!(Test-Path $wrapperDir)) {
-        New-Item -ItemType Directory -Path $wrapperDir -Force | Out-Null
-    }
+#     $wrapperDir = "$env:USERPROFILE\.local\bin"
+#     if (!(Test-Path $wrapperDir)) {
+#         New-Item -ItemType Directory -Path $wrapperDir -Force | Out-Null
+#     }
     
-    @"
-@echo off
-node "%~dp0..\openclaw\dist\entry.js" %*
-"@ | Out-File -FilePath "$wrapperDir\openclaw.cmd" -Encoding ASCII -Force
+#     @"
+# @echo off
+# node "%~dp0..\openclaw\dist\entry.js" %*
+# "@ | Out-File -FilePath "$wrapperDir\openclaw.cmd" -Encoding ASCII -Force
     
     Write-Host "OpenClaw installed" -Level success
     return $true
@@ -292,7 +299,7 @@ function Main {
         if ($DryRun) {
             Write-Host "[DRY RUN] Would install OpenClaw from git to $GitDir" -Level info
         } else {
-            Install-OpenClawGit -RepoDir $GitDir -Update:(-not $NoGitUpdate)
+            Install-OpenClawGit -RepoDir $GitDir -RepoUrl $RepoUrl -Update:(-not $NoGitUpdate)
         }
     } else {
         # npm method
