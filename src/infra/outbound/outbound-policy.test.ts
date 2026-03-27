@@ -1,11 +1,56 @@
-import { describe, expect, it } from "vitest";
+import { Container, Separator, TextDisplay } from "@buape/carbon";
+import { beforeEach, describe, expect, it } from "vitest";
+import { vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  applyCrossContextDecoration,
-  buildCrossContextDecoration,
-  enforceCrossContextPolicy,
-  shouldApplyCrossContextMarker,
-} from "./outbound-policy.js";
+
+let applyCrossContextDecoration: typeof import("./outbound-policy.js").applyCrossContextDecoration;
+let buildCrossContextDecoration: typeof import("./outbound-policy.js").buildCrossContextDecoration;
+let enforceCrossContextPolicy: typeof import("./outbound-policy.js").enforceCrossContextPolicy;
+let shouldApplyCrossContextMarker: typeof import("./outbound-policy.js").shouldApplyCrossContextMarker;
+
+class TestDiscordUiContainer extends Container {}
+
+const mocks = vi.hoisted(() => ({
+  getChannelMessageAdapter: vi.fn((channel: string) =>
+    channel === "discord"
+      ? {
+          supportsComponentsV2: true,
+          buildCrossContextComponents: ({
+            originLabel,
+            message,
+          }: {
+            originLabel: string;
+            message: string;
+          }) => {
+            const trimmed = message.trim();
+            const components: Array<TextDisplay | Separator> = [];
+            if (trimmed) {
+              components.push(new TextDisplay(message));
+              components.push(new Separator({ divider: true, spacing: "small" }));
+            }
+            components.push(new TextDisplay(`*From ${originLabel}*`));
+            return [new TestDiscordUiContainer(components)];
+          },
+        }
+      : { supportsComponentsV2: false },
+  ),
+  normalizeTargetForProvider: vi.fn((channel: string, raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    if (channel === "slack") {
+      return trimmed.replace(/^#/, "");
+    }
+    return trimmed;
+  }),
+  lookupDirectoryDisplay: vi.fn(async ({ targetId }: { targetId: string }) =>
+    targetId.replace(/^#/, ""),
+  ),
+  formatTargetDisplay: vi.fn(
+    ({ target, display }: { target: string; display?: string }) => display ?? target,
+  ),
+}));
 
 const slackConfig = {
   channels: {
@@ -23,6 +68,27 @@ const discordConfig = {
 } as OpenClawConfig;
 
 describe("outbound policy helpers", () => {
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    vi.doMock("./channel-adapters.js", () => ({
+      getChannelMessageAdapter: mocks.getChannelMessageAdapter,
+    }));
+    vi.doMock("./target-normalization.js", () => ({
+      normalizeTargetForProvider: mocks.normalizeTargetForProvider,
+    }));
+    vi.doMock("./target-resolver.js", () => ({
+      formatTargetDisplay: mocks.formatTargetDisplay,
+      lookupDirectoryDisplay: mocks.lookupDirectoryDisplay,
+    }));
+    ({
+      applyCrossContextDecoration,
+      buildCrossContextDecoration,
+      enforceCrossContextPolicy,
+      shouldApplyCrossContextMarker,
+    } = await import("./outbound-policy.js"));
+  });
+
   it("allows cross-provider sends when enabled", () => {
     const cfg = {
       ...slackConfig,
@@ -67,6 +133,25 @@ describe("outbound policy helpers", () => {
         cfg,
         channel: "slack",
         action: "send",
+        args: { to: "C999" },
+        toolContext: { currentChannelId: "C123", currentChannelProvider: "slack" },
+      }),
+    ).toThrow(/target="C999" while bound to "C123"/);
+  });
+
+  it("blocks same-provider cross-context uploads when allowWithinProvider is false", () => {
+    const cfg = {
+      ...slackConfig,
+      tools: {
+        message: { crossContext: { allowWithinProvider: false } },
+      },
+    } as OpenClawConfig;
+
+    expect(() =>
+      enforceCrossContextPolicy({
+        cfg,
+        channel: "slack",
+        action: "upload-file",
         args: { to: "C999" },
         toolContext: { currentChannelId: "C123", currentChannelProvider: "slack" },
       }),
@@ -121,6 +206,7 @@ describe("outbound policy helpers", () => {
 
   it("marks only supported cross-context actions", () => {
     expect(shouldApplyCrossContextMarker("send")).toBe(true);
+    expect(shouldApplyCrossContextMarker("upload-file")).toBe(true);
     expect(shouldApplyCrossContextMarker("thread-reply")).toBe(true);
     expect(shouldApplyCrossContextMarker("thread-create")).toBe(false);
   });

@@ -10,6 +10,7 @@ import type {
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import { OLLAMA_DEFAULT_BASE_URL } from "./ollama-defaults.js";
 import {
   buildAssistantMessage as buildStreamAssistantMessage,
   buildStreamErrorAssistantMessage,
@@ -18,7 +19,7 @@ import {
 
 const log = createSubsystemLogger("ollama-stream");
 
-export const OLLAMA_NATIVE_BASE_URL = "http://127.0.0.1:11434";
+export const OLLAMA_NATIVE_BASE_URL = OLLAMA_DEFAULT_BASE_URL;
 
 export function resolveOllamaBaseUrlForRun(params: {
   modelBaseUrl?: string;
@@ -540,7 +541,14 @@ export function createOllamaStreamFn(
           message: assistantMessage,
         });
       } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
+        let errorMessage = err instanceof Error ? err.message : String(err);
+        // Include nested cause for better diagnostics (e.g. undici wraps
+        // network errors as `TypeError: fetch failed` with the real error
+        // in `.cause`).
+        if (err instanceof Error && err.cause instanceof Error && err.cause.message) {
+          errorMessage = `${errorMessage}: ${err.cause.message}`;
+          log.warn(`Ollama fetch error cause: ${err.cause.message}`);
+        }
         stream.push({
           type: "error",
           reason: "error",
